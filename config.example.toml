@@ -1,0 +1,21 @@
+# Copie para ~/.config/wtp/config.toml e ajuste.
+
+[defaults]
+# Onde os worktrees ficam: <worktrees_dir>/<projeto>-<nome>
+worktrees_dir = "~/Projects"
+
+[projects.outserv_agenda]
+main_checkout = "~/Projects/outserv_agenda"
+# Worktree "x" vira http://x.agenda.localhost/ (o navegador resolve *.localhost sozinho)
+domain = "agenda.localhost"
+php_version = "8.1"
+env_file = ".env"
+base_url_key = "app.baseURL"
+main_branch = "main"
+document_root = "public"
+# Chave do .env usada por --db. No CI4, database.<grupo>.database sobrescreve o Config.
+db_override_key = "database.dbportal.database"
+migrations_dir = "app/Database/Migrations"
+writable_dir = "writable"
+# Arquivos ignorados pelo git que o app precisa para subir. Sem eles, HTTP 500.
+copy_files = ["app/Config/App.php", "app/Config/Constants.php"]
