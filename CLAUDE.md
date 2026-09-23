@@ -83,6 +83,7 @@ refine depois. Mesmo assim, qualquer comando que mexa em `/etc/apache2` ou use
 | `wtp doctor [projeto] [nome]` | confere `.env`, `baseURL`, vhost habilitado, permissão do `writable/`, e se a URL responde com HTTP 200 ou 302 |
 | `wtp adopt <projeto> <nome>` | serve um worktree que já existe (feito à mão): cria `.env`, copia `copy_files` e o vhost, sem tocar em git; o `rm` depois remove só isso |
 | `wtp which [dir]` | diz de qual projeto e worktree é um diretório; é o primeiro passo da skill dos agentes |
+| `wtp generate-config [dir]` | cadastra um projeto no config: descobre pelo código o que der (framework por triangulação, vhost existente, git) e devolve em `agent_tasks` o resto, para o agente investigar e rodar de novo; o usuário só entra se o código não mostrar |
 
 Todo comando aceita `--json` (resultado no stdout, mensagens no stderr), para os
 agentes lerem a saída. Os que usam sudo aceitam `--yes`.
@@ -147,7 +148,8 @@ Projeto `outserv_agenda` (CodeIgniter 4, PHP 8.1):
   e `.venv/bin/ruff format .`.
 - PATH: `uv tool install -e . --python /usr/bin/python3.12` instala `~/.local/bin/wtp`
   em modo editável, então mudanças no código valem na hora.
-- Config: `cp config.example.toml ~/.config/wtp/config.toml`.
+- Config: `wtp generate-config` dentro do checkout do projeto (ou copie o
+  `config.example.toml`).
 - Estado: `~/.local/state/wtp/worktrees/<projeto>-<nome>.json` é o manifesto do que o
   wtp criou (é dele que o `rm` lê o que desfazer); `~/.local/state/wtp/locks/` guarda
   os locks.
@@ -183,8 +185,21 @@ Projeto `outserv_agenda` (CodeIgniter 4, PHP 8.1):
 - **A raiz do agenda responde 307** para `/acesso/login`, e não 200 nem 302. O doctor
   aceita 2xx e 3xx, segue um redirect no mesmo host e confere se os links de
   `/assets/` apontam para o host do worktree (baseURL errado aparece aqui).
-- **`vendor/` é versionado** no outserv_agenda, então o `composer install` quase nunca
-  roda; o passo fica para projetos que ignoram o `vendor/`.
+- **`vendor/` é versionado** no outserv_agenda, então lá o `composer install` quase
+  nunca roda. No produto-main (Laravel) não é, e roda em todo `new`.
+- **Composer com o PHP errado.** O `package:discover` do Laravel roda dentro do
+  `composer install`, com o mesmo PHP do composer. O wtp roda `php<versão> composer`,
+  com a versão do projeto, e não o `php` padrão da máquina.
+- **Pastas do Laravel antes do composer.** `storage/framework/{views,sessions}` são
+  ignoradas pelo git e não vêm no worktree; sem elas o `package:discover` falha com
+  `Please provide a valid cache path`. O `ensure_dirs` cria essas pastas antes do
+  composer. O manifesto guarda só a pasta mais alta que faltava, e o `rm` só apaga
+  pastas vazias dentro dela, para não levar junto o que já existia.
+- **Composer interrompido.** Um `composer install` que falha deixa `vendor/` pela
+  metade. O manifesto marca `composer_running` e o próximo `new` roda de novo.
+- **Estilo do `.env`.** CodeIgniter usa `app.baseURL = 'x'`, Laravel usa `APP_URL=x`.
+  A reescrita mantém espaços e aspas da linha original; chave nova segue o estilo da
+  maioria das linhas.
 - **Vários agentes ao mesmo tempo.** `git fetch` e `git worktree add` em paralelo no
   mesmo repo brigam pelos locks de ref; o reload do Apache também. O wtp serializa
   essas etapas com `flock` (um lock por projeto para git, um global para Apache).
@@ -195,7 +210,7 @@ Projeto `outserv_agenda` (CodeIgniter 4, PHP 8.1):
   prova nada; quem prova é a checagem de assets do doctor. Um vhost catch-all que
   devolva 404 resolveria, mas mexeria na ordem dos vhosts existentes: decisão do
   usuário.
-- **Tudo que vai para o sudo, o git ou o vhost passa por `wtp/validation.py`.**
+- **Tudo que vai para o sudo, o git ou o vhost passa por `wtp/core/validation.py`.**
   Branch com `-` na frente virava opção do `git worktree add` (`--branch=--force`);
   `copy_files`/`writable_dir` com `..` saíam do worktree (e o `writable_dir` vai para
   um `chgrp -R` como root); `domain` e caminhos entram crus no vhost. O `rm` também
@@ -204,7 +219,18 @@ Projeto `outserv_agenda` (CodeIgniter 4, PHP 8.1):
   apontando para `/etc` levava o chgrp (root) para fora. Use sempre `-h -P`.
 - **O guard do Python não basta.** Os scripts que rodam com sudo revalidam o prefixo
   `wtp-` e a marca na primeira linha do `.conf`. Eles têm teste real em
-  `tests/test_sudo_scripts.py`, com os comandos do Apache trocados por stubs.
+  `tests/adapters/test_sudo_scripts.py`, com os comandos do Apache trocados por stubs.
+- **Nem todo projeto guarda a URL base igual.** O wtp só reconhece `app.baseURL`
+  (CodeIgniter 4) e `APP_URL` (Laravel). Fora disso, não chuta: devolve a tarefa para
+  o **agente**, não para o usuário. O `generate-config` põe em `agent_tasks` onde
+  procurar e com qual flag rodar de novo; o `new` com `base_url_key` vazio não mexe
+  na URL e avisa com um warning que começa com "Agente:". O usuário só é chamado
+  quando o código do projeto não mostra a resposta.
+- **Framework por triangulação, não por um sinal só.** O agenda não tem
+  `codeigniter4/framework` no composer.json (o `system/` é versionado), então um
+  detector baseado só no composer erraria. O wtp cruza composer.json, arquivo de
+  entrada (`spark`, `artisan`) e chave do `.env`: dois sinais confirmam, um é palpite,
+  sinais de frameworks diferentes viram tarefa para o agente.
 - **`*.localhost` e DNS.** O doctor não depende de DNS: conecta em 127.0.0.1:80
   mandando o header `Host`.
 - **O hook anti-vibe-coding bloqueia comandos** em que apareçam `git branch` e `-D`
@@ -213,24 +239,37 @@ Projeto `outserv_agenda` (CodeIgniter 4, PHP 8.1):
 
 ## Estrutura
 
+Camadas: cada pasta só importa as de baixo (`core` não importa nada do wtp fora dele).
+
 ```
 worktree-php-manager/
   pyproject.toml          # entry point: wtp = wtp.cli:main
   config.example.toml     # molde do ~/.config/wtp/config.toml
   skills/wtp/SKILL.md     # skill global dos agentes (Claude Code e Codex)
   wtp/
-    cli.py                # argparse, só roteia
-    config.py             # leitura do config.toml
-    services.py           # junta os efeitos colaterais num lugar só
-    runner.py             # subprocess atrás de uma classe
-    git_ops.py            # worktree add/remove/list, status
-    apache.py             # template do vhost, a2ensite, configtest, reload
-    envfile.py            # cópia e reescrita do .env
-    manifest.py           # o que o wtp criou em cada worktree
-    provision.py          # new e adopt
-    teardown.py           # rm
-    listing.py, doctor.py, locate.py, browser.py, http_probe.py
-    naming.py, fpm.py, permissions.py, locking.py, console.py, errors.py
-  tests/
+    core/                 # regras puras
+      config.py           # leitura e validação do config.toml
+      frameworks.py       # perfis de CodeIgniter 4 e Laravel
+      validation.py       # tudo que vai para sudo, git ou vhost
+      naming.py, envfile.py, manifest.py, errors.py
+    adapters/             # efeitos colaterais, cada um atrás de uma classe ou função
+      runner.py           # subprocess
+      git_ops.py          # worktree add/remove/list, status, branch
+      apache.py           # template do vhost e scripts do sudo
+      composer.py, fpm.py, permissions.py, http_probe.py, browser.py, locking.py, console.py
+    actions/              # o que cada comando faz
+      services.py         # junta os adaptadores num lugar só
+      provision.py        # new e adopt
+      teardown.py         # rm
+      listing.py, doctor.py, locate.py
+    detection/            # generate-config
+      triangulate.py      # descobre o framework por três sinais
+      detect.py           # monta o ProjectConfig e as agent_tasks
+      config_writer.py    # acrescenta o projeto ao config.toml
+    cli/
+      parser.py           # argparse
+      commands.py         # um handler por subcomando
+      main.py             # main(), erros sem traceback
+  tests/                  # mesmas pastas de wtp/
     fakes.py              # ScriptedRunner, FakeGitWorld, FakeApacheHost, CannedHttpProbe
 ```

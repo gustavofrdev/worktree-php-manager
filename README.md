@@ -37,11 +37,29 @@ cd worktree-php-manager
 uv tool install -e . --python python3.12
 wtp --version
 
-# Config dos projetos
-mkdir -p ~/.config/wtp
-cp config.example.toml ~/.config/wtp/config.toml
-$EDITOR ~/.config/wtp/config.toml
+# Cadastra um projeto: rode dentro do checkout dele
+cd ~/Projects/meu-projeto
+wtp generate-config --print   # confere o que seria gravado
+wtp generate-config           # grava em ~/.config/wtp/config.toml
 ```
+
+O `generate-config` descobre o que der pelo código:
+
+- **Framework, por triangulação.** Cruza três sinais independentes: o pacote no
+  `composer.json`, o arquivo de entrada (`artisan` ou `spark`) e a chave de URL base
+  no `.env`. Dois ou três sinais concordando confirmam; um só é palpite; sinais de
+  frameworks diferentes viram tarefa para resolver. Hoje ele conhece CodeIgniter 4 e
+  Laravel, e cada um traz seu perfil: chave da URL base, chave do banco, migrations,
+  pastas graváveis e pastas que precisam existir.
+- **Do vhost que já aponta para o checkout:** domínio, versão do PHP e `document_root`.
+- **Do git:** a branch principal (`origin/HEAD`) e os arquivos de config ignorados,
+  que viram `copy_files`.
+
+O que ele não conseguir descobrir sai como `PARA O AGENTE`, com onde procurar e com
+qual flag rodar de novo (por exemplo `--base-url-key <chave>`). A ideia é o agente
+ler o código e resolver; só se o código não mostrar é que ele pergunta a você. O
+comando nunca sobrescreve um projeto que já está no config. Se preferir escrever à
+mão, o molde é o `config.example.toml`.
 
 O `~/.local/bin` precisa estar no `PATH`.
 
@@ -64,8 +82,26 @@ main_branch = "main"
 document_root = "public"
 db_override_key = "database.dbportal.database"
 migrations_dir = "app/Database/Migrations"
-writable_dir = "writable"
+framework = "codeigniter4"
+writable_dirs = ["writable"]
 copy_files = ["app/Config/App.php", "app/Config/Constants.php"]
+ensure_dirs = []
+```
+
+Um projeto Laravel, como o `generate-config` gera:
+
+```toml
+[projects.produto-main]
+main_checkout = "/home/nk/Projects/produto-main"
+domain = "produto-main.localhost"
+php_version = "8.4"
+base_url_key = "APP_URL"
+db_override_key = "DB_DATABASE"
+migrations_dir = "database/migrations"
+framework = "laravel"
+writable_dirs = ["storage", "bootstrap/cache"]
+ensure_dirs = ["storage/framework/cache/data", "storage/framework/sessions",
+               "storage/framework/views", "storage/logs", "bootstrap/cache"]
 ```
 
 | Chave | Obrigatória | Para que serve |
@@ -73,13 +109,15 @@ copy_files = ["app/Config/App.php", "app/Config/Constants.php"]
 | `main_checkout` | sim | checkout principal do repositório; é de onde saem o `.env` e os `copy_files` |
 | `domain` | sim | domínio base dos hosts dos worktrees |
 | `php_version` | sim | escolhe o socket do PHP-FPM no vhost e o pool em `/etc/php/<v>/fpm/pool.d` |
-| `env_file`, `base_url_key` | não | arquivo `.env` e a chave do baseURL que é reescrita |
+| `env_file`, `base_url_key` | não | arquivo `.env` e a chave da URL base que é reescrita, no estilo do próprio arquivo (`app.baseURL = 'x'` ou `APP_URL=x`). Vazio: o wtp não mexe na URL e avisa |
 | `main_branch` | não | base das branches novas e referência do `+/-` no `wtp ls` |
 | `document_root` | não | pasta pública, relativa ao worktree |
 | `db_override_key` | não | chave do `.env` que o `--db` preenche (no CodeIgniter 4, `database.<grupo>.database`) |
 | `migrations_dir` | não | o wtp avisa quando a branch traz migrations que a main não tem |
-| `writable_dir` | não | pasta em que o usuário do pool do PHP-FPM precisa gravar |
+| `framework` | não | `codeigniter4`, `laravel` ou vazio; liga cuidados de cada um, como o aviso de cache de config do Laravel |
+| `writable_dirs` | não | pastas em que o usuário do pool do PHP-FPM precisa gravar (o antigo `writable_dir`, texto, ainda vale) |
 | `copy_files` | não | arquivos ignorados pelo git que o app precisa para subir (credenciais, config local) |
+| `ensure_dirs` | não | pastas ignoradas pelo git que o app precisa encontrar criadas; o wtp cria antes do `composer install` |
 
 Para descobrir o que colocar em `copy_files`, rode no checkout principal:
 
@@ -108,6 +146,7 @@ wtp rm outserv_agenda fix-login --delete-branch            # desfaz tudo
 | `wtp open <projeto> <nome>` | abre a URL com `wslview`, `explorer.exe` ou `xdg-open` |
 | `wtp rm <projeto> <nome> [--delete-branch]` | recusa se houver alteração não commitada; remove vhost, worktree e, se pedido, a branch |
 | `wtp which [dir]` | diz de qual projeto e de qual worktree é um diretório |
+| `wtp generate-config [dir] [--print] [--base-url-key k] [--name n]` | cadastra o projeto de um checkout no config: descobre o que der pelo código e devolve o resto como tarefa para o agente |
 
 Opções de cada comando (vão depois do subcomando):
 
@@ -146,6 +185,10 @@ ambiente isolado para corrigir X"); ele encontra a skill e usa o `wtp` sozinho.
 - **Só mexe no que é dele.** Os vhosts se chamam `wtp-<projeto>-<nome>.conf` e têm
   uma marca na primeira linha. O wtp recusa tocar em qualquer outro arquivo, e os
   scripts que rodam com sudo conferem isso de novo.
+- **`composer install` com o PHP do projeto.** Roda como `php<versão> composer`, porque
+  os scripts do composer (o `package:discover` do Laravel, por exemplo) usam o mesmo
+  PHP. Se ele falhar no meio, o próximo `wtp new` roda de novo em vez de confiar no
+  `vendor/` pela metade.
 - **Um sudo por operação.** Instalar ou remover um vhost é uma única chamada de
   `sudo`, que roda o `apache2ctl configtest` antes do reload. Se o configtest falhar,
   o arquivo anterior volta (ou o novo sai) e o Apache não é recarregado.
@@ -179,7 +222,7 @@ O wtp chama `sudo -n bash -c <script>` para instalar e remover vhosts e para aju
 o `writable/`. O `-n` faz o sudo falhar em vez de pedir senha, então o seu usuário
 precisa de sudo sem senha. Como o comando é `bash`, uma regra de sudoers restrita a
 ele equivale, na prática, a acesso total; o wtp foi pensado para uma máquina de
-desenvolvimento pessoal. Os scripts ficam em `wtp/apache.py` e `wtp/permissions.py`
+desenvolvimento pessoal. Os scripts ficam em `wtp/adapters/apache.py` e `wtp/adapters/permissions.py`
 para você ler antes de usar.
 
 ## Desenvolvimento
@@ -193,7 +236,19 @@ uv sync
 
 Os testes não tocam no Apache nem no git reais: usam classes falsas nomeadas em
 `tests/fakes.py` e `tmp_path`. Os scripts que vão para o sudo são testados de verdade
-em `bash`, com os comandos do Apache trocados por stubs (`tests/test_sudo_scripts.py`).
+em `bash`, com os comandos do Apache trocados por stubs (`tests/adapters/test_sudo_scripts.py`).
+
+O código é dividido em camadas, e cada uma só importa as de baixo:
+
+| Pasta | O que tem |
+|---|---|
+| `wtp/core/` | regras puras: config, nomes, validação, perfis de framework, manifesto, `.env` |
+| `wtp/adapters/` | efeitos colaterais: git, Apache e sudo, PHP-FPM, composer, HTTP, terminal |
+| `wtp/actions/` | o que cada comando faz: `new`/`adopt`, `rm`, `ls`, `doctor`, `which` |
+| `wtp/detection/` | `generate-config`: triangulação de framework e escrita do config |
+| `wtp/cli/` | parser, um handler por subcomando e o `main` |
+
+Os testes em `tests/` seguem as mesmas pastas.
 
 As regras de código, as decisões e as armadilhas encontradas estão no
 [`AGENTS.md`](AGENTS.md) (o mesmo arquivo que o `CLAUDE.md`). Leia antes de contribuir.

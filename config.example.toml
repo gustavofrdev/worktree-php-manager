@@ -16,6 +16,11 @@ document_root = "public"
 # Chave do .env usada por --db. No CI4, database.<grupo>.database sobrescreve o Config.
 db_override_key = "database.dbportal.database"
 migrations_dir = "app/Database/Migrations"
-writable_dir = "writable"
+# codeigniter4, laravel ou vazio. O wtp generate-config descobre sozinho.
+framework = "codeigniter4"
+writable_dirs = ["writable"]
 # Arquivos ignorados pelo git que o app precisa para subir. Sem eles, HTTP 500.
 copy_files = ["app/Config/App.php", "app/Config/Constants.php"]
+# Pastas ignoradas pelo git que o app precisa encontrar criadas (no Laravel,
+# storage/framework/views e companhia).
+ensure_dirs = []

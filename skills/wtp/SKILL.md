@@ -29,9 +29,23 @@ responde HTTP 500. Use sempre o `wtp`.
    3. Se `worktree` vier preenchido e `url` também, você já está num worktree do wtp;
    confira com o usuário se ele é seu antes de reaproveitar.
 
-   Se der `não pertence a nenhum projeto`, o projeto não está no wtp. Trabalhe do
-   jeito normal, ou pergunte ao usuário se ele quer cadastrar
-   (`~/.config/wtp/config.toml`).
+   Se der `não pertence a nenhum projeto`, o projeto não está no wtp. Pergunte ao
+   usuário se ele quer cadastrar. Se quiser, rode no checkout do projeto:
+
+   ```bash
+   wtp generate-config --print --json     # mostra o que seria gravado
+   wtp generate-config --json             # grava em ~/.config/wtp/config.toml
+   ```
+
+   O wtp descobre o framework cruzando três sinais (composer.json, arquivo de entrada
+   como `artisan` ou `spark`, chave do `.env`) e já conhece CodeIgniter 4 e Laravel.
+   O que ele não conseguir descobrir pelo código vem em `agent_tasks`: **isso é
+   trabalho seu, não do usuário.** Investigue o projeto e rode de novo com a flag
+   indicada. Exemplo: sem chave de URL base conhecida, leia `.env.example`,
+   `config/app.php` ou `app/Config/App.php`, ache a chave e rode
+   `wtp generate-config --base-url-key <chave>`. Só pergunte ao usuário quando o
+   código não mostrar a resposta. As `notes` são palpites: confira os que parecerem
+   estranhos.
 
 2. **Escolha um nome** curto, derivado da tarefa: `fix-select2`, `rel-horas`.
    Regras: letras minúsculas, dígitos e hífen, até 40 caracteres. Veja os que já
@@ -54,7 +68,10 @@ responde HTTP 500. Use sempre o `wtp`.
    - Se a branch já existe localmente, o wtp usa essa branch em vez de criar outra.
    - `--yes` é obrigatório para agente: sem terminal, o wtp não pode pedir
      confirmação do sudo. O wtp só mexe em arquivos `wtp-*.conf` que ele mesmo criou.
-   - Guarde `path`, `url` e `branch` do JSON. Leia `warnings`.
+   - Guarde `path`, `url` e `branch` do JSON e leia `warnings`. Os que começam com
+     "Agente:" são para você resolver: por exemplo, sem `base_url_key` o wtp não mexe
+     na URL; descubra a chave pelo código, ponha no config e rode o `new` de novo.
+     Os demais (migrations, banco compartilhado) você repassa ao usuário.
 
 4. **Trabalhe só dentro de `path`.** Rode os comandos com caminho absoluto ou dentro
    de `path` (no Claude Code, `cd <path>` persiste entre chamadas do Bash; no Codex,
@@ -119,6 +136,7 @@ responde HTTP 500. Use sempre o `wtp`.
 
 ```bash
 wtp which [dir] [--json]                        # projeto e worktree de um diretório
+wtp generate-config [dir] [--print] [--base-url-key k] [--name n] [--json]
 wtp ls [projeto] [--json]                       # branch, +/- da main, alterado, URL
 wtp new <projeto> <nome> [--branch b] [--from main] [--db banco] [--no-composer] --yes [--json]
 wtp adopt <projeto> <nome> --yes [--json]       # serve um worktree que já existe

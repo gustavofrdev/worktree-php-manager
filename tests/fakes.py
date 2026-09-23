@@ -5,12 +5,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from wtp.apache import ApachePaths
-from wtp.config import ProjectConfig, WtpConfig
-from wtp.console import Console
-from wtp.http_probe import HttpReply
-from wtp.runner import CommandResult
-from wtp.services import Services, build_services
+from wtp.actions.services import Services, build_services
+from wtp.adapters.apache import ApachePaths
+from wtp.adapters.console import Console
+from wtp.adapters.http_probe import HttpReply
+from wtp.adapters.runner import CommandResult
+from wtp.core.config import ProjectConfig, WtpConfig
 
 Effect = Callable[[tuple[str, ...], Path | None], CommandResult]
 
@@ -172,14 +172,23 @@ class Sandbox:
     console_output: io.StringIO
 
 
-def make_project(main: Path, copy_files: tuple[str, ...] = ()) -> ProjectConfig:
+def make_project(
+    main: Path,
+    copy_files: tuple[str, ...] = (),
+    base_url_key: str = "app.baseURL",
+    ensure_dirs: tuple[str, ...] = (),
+    framework: str = "codeigniter4",
+) -> ProjectConfig:
     return ProjectConfig(
         key="outserv_agenda",
         main_checkout=main,
         domain="agenda.localhost",
         php_version="8.1",
+        framework=framework,
+        base_url_key=base_url_key,
         db_override_key="database.dbportal.database",
         copy_files=copy_files,
+        ensure_dirs=ensure_dirs,
     )
 
 
@@ -190,7 +199,13 @@ def write_pool(php_root: Path, user: str = "nk") -> None:
 
 
 def make_sandbox(
-    tmp_path: Path, assume_yes: bool = True, pool_user: str = "", copy_files: tuple[str, ...] = ()
+    tmp_path: Path,
+    assume_yes: bool = True,
+    pool_user: str = "",
+    copy_files: tuple[str, ...] = (),
+    base_url_key: str = "app.baseURL",
+    ensure_dirs: tuple[str, ...] = (),
+    framework: str = "codeigniter4",
 ) -> Sandbox:
     import getpass
 
@@ -200,7 +215,7 @@ def make_sandbox(
         "CI_ENVIRONMENT = development\napp.baseURL = 'http://agenda.localhost/'\n"
     )
     write_pool(tmp_path / "php", pool_user or getpass.getuser())
-    project = make_project(main, copy_files)
+    project = make_project(main, copy_files, base_url_key, ensure_dirs, framework)
     config = WtpConfig({project.key: project}, tmp_path / "Projects", tmp_path / "config.toml")
     runner = ScriptedRunner()
     output = io.StringIO()
